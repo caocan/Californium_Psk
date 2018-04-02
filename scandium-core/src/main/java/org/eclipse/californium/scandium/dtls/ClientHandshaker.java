@@ -381,9 +381,10 @@ public class ClientHandshaker extends Handshaker {
 			AlertMessage alert = new AlertMessage(AlertLevel.FATAL, AlertDescription.HANDSHAKE_FAILURE, session.getPeer());
 			throw new HandshakeException("No Identity found for peer: "	+ getPeerAddress(), alert);
 		}
-		//如果有，就将其添加到identity_list容器中
-		clientHello.addIdentity_list(identity);
 
+		session.setPeerIdentity(new PreSharedKeyIdentity(identity));
+
+		clientHello.addIdentityTolist(identity);
 		clientHello.setFragmentLength(clientHello.getMessageLength());
 
 		DTLSFlight flight = new DTLSFlight(getSession());

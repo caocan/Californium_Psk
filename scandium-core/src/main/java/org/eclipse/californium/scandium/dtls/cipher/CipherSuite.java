@@ -30,6 +30,7 @@ import java.util.logging.Logger;
 
 import org.eclipse.californium.elements.util.DatagramReader;
 import org.eclipse.californium.elements.util.DatagramWriter;
+import org.eclipse.californium.scandium.auth.PreSharedKeyIdentity;
 
 
 /**

@@ -19,13 +19,6 @@
  ******************************************************************************/
 package org.eclipse.californium.scandium.dtls;
 
-import java.net.InetSocketAddress;
-import java.security.SecureRandom;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.List;
-
 import org.eclipse.californium.elements.util.DatagramReader;
 import org.eclipse.californium.elements.util.DatagramWriter;
 import org.eclipse.californium.scandium.dtls.CertificateTypeExtension.CertificateType;
@@ -34,6 +27,11 @@ import org.eclipse.californium.scandium.dtls.SupportedPointFormatsExtension.ECPo
 import org.eclipse.californium.scandium.dtls.cipher.CipherSuite;
 import org.eclipse.californium.scandium.dtls.cipher.ECDHECryptography.SupportedGroup;
 import org.eclipse.californium.scandium.util.ByteArrayUtils;
+
+import java.net.InetSocketAddress;
+import java.nio.charset.Charset;
+import java.security.SecureRandom;
+import java.util.*;
 
 /**
  * When a client first connects to a server, it is required to send the
@@ -58,6 +56,13 @@ public final class ClientHello extends HandshakeMessage {
 
 	private static final int COMPRESSION_METHODS_LENGTH_BITS = 8;
 
+	//新增加的常量，一个identity是两个字节
+	private static final int IDENTITY_LIST_LENGTH_BITS = 8;
+
+	private static final int IDENTITY_LENGTH_BITS = 16;
+
+	private static final Charset CHAR_SET_UTF8 = Charset.forName("UTF8");
+
 	// Members ///////////////////////////////////////////////////////////
 
 	/**
@@ -80,10 +85,6 @@ public final class ClientHello extends HandshakeMessage {
 	 * the client's first preference first.
 	 */
 	private List<CipherSuite> cipherSuites = new ArrayList<>();
-
-	//在ClientHello中创建一个用来存放identity的容器，用来将所有与之联系的对等体的identity放进去。
-	private List<String> identity_list = new ArrayList<>();
-
 
 	/**
 	 * This is a list of the compression methods supported by the client, sorted
@@ -116,8 +117,8 @@ public final class ClientHello extends HandshakeMessage {
 	 *            received from or should be sent to
 	 */
 	public ClientHello(ProtocolVersion version, SecureRandom secureRandom,
-			List<CertificateType> supportedClientCertificateTypes,
-			List<CertificateType> supportedServerCertificateTypes, InetSocketAddress peerAddress) {
+                       List<CertificateType> supportedClientCertificateTypes,
+                       List<CertificateType> supportedServerCertificateTypes, InetSocketAddress peerAddress) {
 		this(version, secureRandom, null, supportedClientCertificateTypes, supportedServerCertificateTypes, peerAddress);
 	}
 
@@ -135,14 +136,14 @@ public final class ClientHello extends HandshakeMessage {
 	 * @param supportedServerCertificateTypes the list of certificate types supported by the server
 	 */
 	public ClientHello(ProtocolVersion version, SecureRandom secureRandom, DTLSSession session, List<CertificateType> supportedClientCertificateTypes,
-			List<CertificateType> supportedServerCertificateTypes) {
+                       List<CertificateType> supportedServerCertificateTypes) {
 		this(version, secureRandom, session.getSessionIdentifier(), supportedClientCertificateTypes, supportedServerCertificateTypes, session.getPeer());
 		addCipherSuite(session.getWriteState().getCipherSuite());
 		addCompressionMethod(session.getWriteState().getCompressionMethod());
 	}
 
 	private ClientHello(ProtocolVersion version, SecureRandom secureRandom, SessionId sessionId, List<CertificateType> supportedClientCertificateTypes,
-			List<CertificateType> supportedServerCertificateTypes, InetSocketAddress peerAddress) {
+                        List<CertificateType> supportedServerCertificateTypes, InetSocketAddress peerAddress) {
 		this(peerAddress);
 		this.clientVersion = version;
 		this.random = new Random(secureRandom);
@@ -207,6 +208,16 @@ public final class ClientHello extends HandshakeMessage {
 		writer.write(cipherSuites.size() * 2, CIPHER_SUITS_LENGTH_BITS);
 		writer.writeBytes(CipherSuite.listToByteArray(cipherSuites));
 
+		//先把数组长度写进去
+		writer.write(identityEncoded.size(), IDENTITY_LIST_LENGTH_BITS);
+		//再循环遍历每个字符串序列化后的字节数组，写进去
+		for (int i = 0; i < identityEncoded.size(); i++){
+			//长度
+			writer.write(identityEncoded.get(i).length, IDENTITY_LENGTH_BITS);
+			//值
+			writer.writeBytes(identityEncoded.get(i));
+		}
+
 		writer.write(compressionMethods.size(), COMPRESSION_METHODS_LENGTH_BITS);
 		writer.writeBytes(CompressionMethod.listToByteArray(compressionMethods));
 
@@ -251,6 +262,18 @@ public final class ClientHello extends HandshakeMessage {
 		result.cipherSuites = CipherSuite.listFromByteArray(reader.readBytes(cipherSuitesLength),
 				cipherSuitesLength / 2); // 2
 
+		//反序列化出我们需要的identity_list
+		//先读出列表长度
+		int identity_list_length = reader.read(IDENTITY_LIST_LENGTH_BITS);
+		//循环遍历
+		for(int i = 0; i < identity_list_length; i++){
+			//读出identity长度
+			int identity_length = reader.read(IDENTITY_LENGTH_BITS);
+			byte[] tmp = reader.readBytes(identity_length);
+			result.identityEncoded.add(tmp);
+			result.identity_list.add(new String(tmp));
+		}
+
 		int compressionMethodsLength = reader.read(COMPRESSION_METHODS_LENGTH_BITS);
 		result.compressionMethods = CompressionMethod.listFromByteArray(reader.readBytes(compressionMethodsLength),
 				compressionMethodsLength);
@@ -280,9 +303,16 @@ public final class ClientHello extends HandshakeMessage {
 
 		// fixed sizes: version (2) + random (32) + session ID length (1) +
 		// cookie length (1) + cipher suites length (2) + compression methods
-		// length (1) = 39
-		return 39 + sessionId.length() + cookie.length + cipherSuites.size() * 2 + compressionMethods.size()
-				+ extensionsLength;
+		// length (1) +
+		// Identity_List的长度 identity_list_length (1) = 40
+		//变化的长度：identity_list_length个identity，每个的长度值是2个字节，还需要加上每个字节数组的长度
+		int length = 40 + sessionId.length() + cookie.length + cipherSuites.size() * 2 + compressionMethods.size()
+				+ extensionsLength ;
+		for(int i = 0; i < identity_list.size(); i++){
+			length += identityEncoded.get(i).length;
+			length += 2;
+		}
+		return length;
 	}
 
 	@Override
@@ -361,15 +391,6 @@ public final class ClientHello extends HandshakeMessage {
 		}
 		System.out.println("添加加密算法"+cipherSuites);
 		cipherSuites.add(cipherSuite);
-	}
-
-	//生成identity_list的对应getter和setter方法，提供对外接口
-	public List<String> getIdentity_list() {
-		return identity_list;
-	}
-
-	public void addIdentity_list(String Identity) {
-		identity_list.add(Identity);
 	}
 
 	public List<CompressionMethod> getCompressionMethods() {
@@ -460,4 +481,32 @@ public final class ClientHello extends HandshakeMessage {
 			return null;
 		}
 	}
+
+	/**
+	 * 我的扩展
+	 */
+
+	/*添加一个存放Identity的字符串数组*/
+	private List<String> identity_list = new ArrayList<>();
+
+	/*添加一个存放Identity序列化以后的数组*/
+	private List<byte[]> identityEncoded = new ArrayList<>();
+
+	public List<String> getIdentity_list() {
+		return identity_list;
+	}
+
+	public void addIdentityTolist(String identity) {
+		identity_list.add(identity);
+		identityEncoded.add(identity.getBytes(CHAR_SET_UTF8));
+	}
+
+	public List<byte[]> getIdentityEncoded() {
+		return identityEncoded;
+	}
+
+	public void addIdentityEncodedToList(byte[] identityEncodedArray) {
+		identityEncoded.add(identityEncodedArray);
+	}
+
 }
