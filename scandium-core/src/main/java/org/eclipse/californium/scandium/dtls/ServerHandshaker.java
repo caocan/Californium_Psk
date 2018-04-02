@@ -477,6 +477,8 @@ public class ServerHandshaker extends Handshaker {
 		byte[] psk;
 		String identity = "";
 		boolean CanFindPSK = false;
+		clientRandom = clientHello.getRandom();
+		serverRandom = new Random();
 
 		handshakeStarted();
 		DTLSFlight flight = new DTLSFlight(getSession());
@@ -571,10 +573,6 @@ public class ServerHandshaker extends Handshaker {
 	private void createServerHello(String identity, final ClientHello clientHello, final DTLSFlight flight) throws HandshakeException {
 
 		ProtocolVersion serverVersion = negotiateProtocolVersion(clientHello.getClientVersion());
-
-		// store client and server random
-		clientRandom = clientHello.getRandom();
-		serverRandom = new Random();
 
 		SessionId sessionId = new SessionId();
 		session.setSessionIdentifier(sessionId);
